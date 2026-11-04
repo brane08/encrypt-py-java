@@ -1,0 +1,11 @@
+[project]
+name = "python-app"
+version = "0.1.0"
+description = "Portable AES encryption sample"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=45.0.0",
+]
+
+[tool.uv]
+package = false

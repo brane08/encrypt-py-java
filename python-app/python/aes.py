@@ -1,35 +1,55 @@
 import base64
+import os
+import sys
 
-from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+KEY_ENV = "AES_KEY_B64"
+
+
+def load_key(env: str = KEY_ENV) -> bytes:
+    """Read a base64-encoded 32-byte key from the environment."""
+    value = os.environ.get(env)
+    if not value:
+        raise RuntimeError(f"{env} is not set (generate one: python aes.py --gen-key)")
+    key = base64.b64decode(value)
+    if len(key) != 32:
+        raise RuntimeError(f"{env} must decode to 32 bytes, got {len(key)}")
+    return key
 
 
 class AESCipher:
-    iv_value = b"\x4d\x6a\x43\x64\x4a\x65\x4c\x71\x6b\x76\x4e\x29\x73\x78\x48\x35"
+    """AES-256-GCM. Payload = base64(nonce(12) || ciphertext || tag(16))."""
 
-    key_value = b"\x59\x79\x4c\x44\x68\x35\x34\x4b\x51\x4f\x76\x24\x62\x50\x61\x46" \
-                b"\x6b\x4a\x5a\x66\x77\x6f\x70\x36\x21\x25\x53\x4d\x6a\x55\x6d\x6c"
-    block_size = 16
-    pad = lambda s: bytes(s + (AESCipher.block_size - len(s) % AESCipher.block_size) * chr(
-        AESCipher.block_size - len(s) % AESCipher.block_size), "utf-8")
-    unpad = lambda s: s[0:-ord(s[-1:])]
+    nonce_size = 12
+
+    def __init__(self, key: bytes):
+        self._aead = AESGCM(key)
 
     @classmethod
-    def encrypt(cls, raw: str):
-        raw = cls.pad(raw)
-        cipher = AES.new(cls.key_value, AES.MODE_CBC, cls.iv_value)
-        return base64.b64encode(cipher.encrypt(raw)).decode("utf-8")
+    def from_env(cls, env: str = KEY_ENV) -> "AESCipher":
+        return cls(load_key(env))
 
-    @classmethod
-    def decrypt(cls, enc: str):
-        enc = base64.b64decode(enc)
-        cipher = AES.new(cls.key_value, AES.MODE_CBC, cls.iv_value)
-        d = cipher.decrypt(enc)
-        return cls.unpad(d).decode("utf-8")
+    def encrypt(self, raw: str) -> str:
+        nonce = os.urandom(self.nonce_size)
+        ct = self._aead.encrypt(nonce, raw.encode("utf-8"), None)
+        return base64.b64encode(nonce + ct).decode("ascii")
+
+    def decrypt(self, enc: str) -> str:
+        data = base64.b64decode(enc)
+        nonce, ct = data[:self.nonce_size], data[self.nonce_size:]
+        return self._aead.decrypt(nonce, ct, None).decode("utf-8")
 
 
 if __name__ == "__main__":
-    message = "hello_world"
-    encrypted_message = AESCipher.encrypt(message)
-    print(encrypted_message)
-    decrypted_message = AESCipher.decrypt("32xtar3ZkpRG9rHQfTK9aw==")
-    print(decrypted_message)
+    if "--gen-key" in sys.argv:
+        print(base64.b64encode(AESGCM.generate_key(bit_length=256)).decode("ascii"))
+        sys.exit(0)
+    cipher = AESCipher.from_env()
+    if len(sys.argv) > 1:
+        # decrypt a payload produced elsewhere (e.g. Java)
+        print(cipher.decrypt(sys.argv[1]))
+    else:
+        payload = cipher.encrypt("SomePassword")
+        print(payload)
+        print(cipher.decrypt(payload))
